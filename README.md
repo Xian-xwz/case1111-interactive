@@ -5,4 +5,4 @@
 - [10 号](https://xian-xwz.github.io/case1111-interactive/lot10/)
 - [12 号](https://xian-xwz.github.io/case1111-interactive/lot12/)
 
-只发布交互页，不含图纸和邮件原件。内容为桩、桩帽和托梁；工程、视觉和 AutoCAD 验收尚未完成。
+只发布交互页，不含图纸和邮件原件。内容为桩、桩帽、托梁和半透明示意土体（非测绘）；工程、视觉和 AutoCAD 验收尚未完成。
