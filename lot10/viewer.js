@@ -28,6 +28,7 @@ export function install(env){
  const themeColors={...candidateColors,...cfg.semantic_palette?.colors};
  const wallProperties=cfg.wall_properties?.metadata_sha256===env.meta.metadata_sha256?cfg.wall_properties.components||{}:{};
  const baseColors=new Map(parts.flatMap(p=>p.meshes.map(m=>[m,m.material.color.clone()])));
+ const authorAlpha=new Map(parts.flatMap(p=>p.meshes.map(m=>[m,{transparent:m.material.transparent,opacity:m.material.opacity,depthWrite:m.material.depthWrite}])));
  const selectionColors=new Map();
  const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
  let pulseStarted=0,pulseStrength=.20;
@@ -70,7 +71,7 @@ export function install(env){
    const layer=layerOf(c),envelope=isEnvelope(c),frame=c.group==='framing',overlay=envelope&&wallMode==='overlay';
    if(layer&&!layers[layer]||!matchesCatalog(c))p.o.visible=false;
    if(envelope&&wallMode==='frame'||frame&&wallMode==='solid')p.o.visible=false;
-   for(const m of p.meshes){m.material.transparent=overlay;m.material.opacity=overlay?.10:1;m.material.depthWrite=!overlay;m.castShadow=!overlay;}
+   for(const m of p.meshes){const a=authorAlpha.get(m);m.material.transparent=overlay||a.transparent;m.material.opacity=overlay?.10:a.opacity;m.material.depthWrite=overlay?false:a.depthWrite;m.castShadow=!overlay&&!a.transparent;}
    if(plan&&Number.isFinite(cfg.levels[c.block]?.[floor]))plane=new T.Plane(new T.Vector3(0,-1,0),cfg.levels[c.block][floor]+(current.cutAbove??1.2));
    else if(cut){const s=current.sections[c.block];if(s)plane=new T.Plane(new T.Vector3(...s.normal),s.constant);}
    for(const m of p.meshes){m.material.clippingPlanes=plane?[plane]:[];m.material.clipShadows=true;m.material.needsUpdate=true;for(const e of m.children)if(e.isLineSegments){e.visible=(!plan||c.group==='stairs')&&!overlay;e.material.clippingPlanes=plane?[plane]:[];}}
