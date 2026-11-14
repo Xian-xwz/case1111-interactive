@@ -16,19 +16,25 @@ export function install(env){
  const ray=new T.Raycaster(),pointer=new T.Vector2();
  const views=new Map(cfg.views.map(v=>[v.id,v]));
  let view=cfg.default_view||cfg.views[0].id,roof=true,terrain=false,trusses=false,selected=null,dirty=true,down=null,initialized=false,surface=cfg.ground_default||'finished';
- let wallMode='solid';const layers=Object.fromEntries(cfg.floor_layers.map(l=>[l.id,true]));
+ let wallMode='solid',terrainTranslucent=false;const layers=Object.fromEntries(cfg.floor_layers.map(l=>[l.id,true]));
  const terrainByView={};
  let catalog=cfg.default_catalog||'arc',catalogFilter=null;
  const matchesCatalog=c=>!catalogFilter||(catalogFilter.groups.has(typeof c==='string'?c:c.group)&&(!catalogFilter.roles||catalogFilter.roles.has(c.role)));
  const partById=new Map(parts.map(p=>[p.c.id,p]));
  const isEnvelope=c=>cfg.framing_floors.includes(c.floor)&&['walls','opening_infill'].includes(c.group);
  const layerOf=c=>cfg.floor_layers.find(l=>(!l.groups||l.groups.includes(c.group))&&(!l.floors||l.floors.includes(c.floor)))?.id;
+ // 显示线保持原材质；地形透明度独立于图层显隐、现状/完成视图和墙体叠加。
+ const isTerrain=c=>['site','site_existing'].includes(c.group)&&!c.display_only&&c.representation!=='display_line'&&c.site_kind!=='display_line';
+ const hasTerrain=parts.some(p=>isTerrain(p.c)&&p.meshes.length>0);
+ const terrainOpacityControl=document.querySelector('#terrain-translucent');
+ document.querySelector('#terrain-opacity-control').hidden=!hasTerrain;
+ terrainOpacityControl.disabled=!hasTerrain;terrainOpacityControl.checked=false;
  let wallTheme='material';
  const candidateColors={fire:'#A33F4A',load_bearing:'#315C9D',bracing:'#70478B',non_bearing:'#286B63',unknown:'#626970',context:'#DAD5C9'};
  const themeColors={...candidateColors,...cfg.semantic_palette?.colors};
  const wallProperties=cfg.wall_properties?.metadata_sha256===env.meta.metadata_sha256?cfg.wall_properties.components||{}:{};
  const baseColors=new Map(parts.flatMap(p=>p.meshes.map(m=>[m,m.material.color.clone()])));
- const authorAlpha=new Map(parts.flatMap(p=>p.meshes.map(m=>[m,{transparent:m.material.transparent,opacity:m.material.opacity,depthWrite:m.material.depthWrite}])));
+ const authorAlpha=new Map(parts.flatMap(p=>p.meshes.map(m=>[m,{transparent:m.material.transparent,opacity:m.material.opacity,depthWrite:m.material.depthWrite,castShadow:m.castShadow}])));
  const selectionColors=new Map();
  const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
  let pulseStarted=0,pulseStrength=.20;
@@ -71,16 +77,18 @@ export function install(env){
    const layer=layerOf(c),envelope=isEnvelope(c),frame=c.group==='framing',overlay=envelope&&wallMode==='overlay';
    if(layer&&!layers[layer]||!matchesCatalog(c))p.o.visible=false;
    if(envelope&&wallMode==='frame'||frame&&wallMode==='solid')p.o.visible=false;
-   for(const m of p.meshes){const a=authorAlpha.get(m);m.material.transparent=overlay||a.transparent;m.material.opacity=overlay?.10:a.opacity;m.material.depthWrite=overlay?false:a.depthWrite;m.castShadow=!overlay&&!a.transparent;}
+   const translucentGround=isTerrain(c)&&terrainTranslucent;
+   for(const m of p.meshes){const a=authorAlpha.get(m);m.material.transparent=translucentGround||overlay||a.transparent;m.material.opacity=translucentGround?.30:overlay?.10:a.opacity;m.material.depthWrite=translucentGround||overlay?false:a.depthWrite;m.castShadow=translucentGround||overlay?false:a.castShadow;}
    if(plan&&Number.isFinite(cfg.levels[c.block]?.[floor]))plane=new T.Plane(new T.Vector3(0,-1,0),cfg.levels[c.block][floor]+(current.cutAbove??1.2));
    else if(cut){const s=current.sections[c.block];if(s)plane=new T.Plane(new T.Vector3(...s.normal),s.constant);}
    for(const m of p.meshes){m.material.clippingPlanes=plane?[plane]:[];m.material.clipShadows=true;m.material.needsUpdate=true;for(const e of m.children)if(e.isLineSegments){e.visible=(!plan||c.group==='stairs')&&!overlay;e.material.clippingPlanes=plane?[plane]:[];}}
-   if(p.o.visible&&plane&&!overlay){const first=caps.children.length;sectionCap(p.meshes,plane);for(const cap of caps.children.slice(first))meshMap.set(cap,p);}
+   if(p.o.visible&&plane&&!overlay){const first=caps.children.length;sectionCap(p.meshes,plane);for(const cap of caps.children.slice(first)){meshMap.set(cap,p);if(isTerrain(c)){const source=p.meshes[0].material;cap.material.transparent=source.transparent;cap.material.opacity=source.opacity;cap.material.depthWrite=source.depthWrite;cap.material.needsUpdate=true;}}}
   }
   document.querySelector('#view-title').textContent=current.label||current.title||current.id;document.querySelector('#view-zh').textContent=current.label_zh||'';
   for(const b of document.querySelectorAll('[data-view]')){b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-pressed',String(b.dataset.view===view));}
   for(const [id,on,disabled]of [['roof',roof,plan||cut],['trusses',trusses,plan],['terrain',terrain,plan]]){const e=document.getElementById(id);e.disabled=disabled||e.dataset.unavailable==='true';e.checked=on&&!e.disabled;}
   document.querySelector('#surface').disabled=!groundGroup.visible;
+  terrainOpacityControl.checked=terrainTranslucent;
   for(const l of cfg.floor_layers)document.getElementById('layer-'+l.id).checked=layers[l.id];
   for(const b of document.querySelectorAll('[data-wall]')){const active=b.dataset.wall===wallMode;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active));}
   document.querySelector('#layer-hint').textContent=plan?'Floor slice / 楼层切片':cut?'Roof hidden for the section / 剖切隐藏屋面':surface==='existing'&&groundGroup.visible?'Existing ground; proposed buildings for reference / 现状地形，拟建建筑用于定位':'Toggle layers to explore / 可切换图层';
@@ -132,7 +140,7 @@ export function install(env){
    const source=selected.meshes[0].material;
    mesh.material.clippingPlanes=source.clippingPlanes;
    mesh.material.transparent=source.transparent;mesh.material.opacity=source.opacity;
-   mesh.material.depthWrite=source.depthWrite;mesh.material.color.copy(source.color);mesh.material.emissive.copy(source.emissive);mesh.material.needsUpdate=true;
+   mesh.material.depthWrite=source.depthWrite;mesh.castShadow=selected.meshes[0].castShadow;mesh.material.color.copy(source.color);mesh.material.emissive.copy(source.emissive);mesh.material.needsUpdate=true;
   });
  }
  async function showLocalModel(p,button){
@@ -243,6 +251,7 @@ export function install(env){
 
  document.querySelector('#trusses').onchange=e=>{trusses=e.target.checked;applyView(false);};document.querySelector('#roof').onchange=e=>{roof=e.target.checked;applyView(false);};document.querySelector('#terrain').onchange=e=>{terrain=e.target.checked;terrainByView[view]=terrain;applyView();};
  document.querySelector('#surface').onchange=e=>{surface=e.target.value;setGroundSurface(surface);applyView(false);};
+ terrainOpacityControl.onchange=e=>{if(!hasTerrain)return;terrainTranslucent=e.target.checked;applyView(false);};
  document.querySelector('#reset').onclick=()=>applyView();document.querySelector('#clear').onclick=clearSelection;
  const activePointers=new Set();
  canvas.addEventListener('pointerdown',e=>{activePointers.add(e.pointerId);down=activePointers.size===1&&e.button===0?{x:e.clientX,y:e.clientY,id:e.pointerId}:null;});
@@ -258,6 +267,6 @@ export function install(env){
   if(!dirty)return;dirty=false;renderer.render(scene,camera);
   const pin=document.querySelector('#pin');if(selected){const center=selected.box.getCenter(new T.Vector3()),q=center.clone().project(camera),x=(q.x*.5+.5)*viewport.clientWidth,y=(.5-q.y*.5)*viewport.clientHeight;pin.textContent=selected.displayLabel||selected.c.id;pin.hidden=!selected.o.visible||(selected.meshes[0]?.material.clippingPlanes||[]).some(pl=>pl.distanceToPoint(center)<-1e-5)||q.z<-1||q.z>1||Math.abs(q.x)>1||Math.abs(q.y)>1;pin.style.left=Math.min(viewport.clientWidth-100,Math.max(8,x+12))+'px';pin.style.top=Math.max(8,y-24)+'px';}}
  window.viewer={state:()=>({view,surface,visibleIds:parts.filter(p=>p.o.visible).map(p=>p.c.id),catalog,wallTheme,effectiveTheme:catalog==='arc'?'material':wallTheme,wallColors:Object.fromEntries(parts.filter(p=>p.c.group==='walls').map(p=>[p.c.id,p.meshes[0].material.color.getHexString()])),visible:parts.filter(p=>p.o.visible).length,total:parts.length,wallMode,layers:{...layers},groups:Object.fromEntries([...new Set(parts.map(p=>p.c.group))].map(g=>[g,parts.filter(p=>p.c.group===g&&p.o.visible).length])),upperEnvelope:parts.filter(p=>isEnvelope(p.c)&&p.o.visible).length,framing:parts.filter(p=>p.c.group==='framing'&&p.o.visible).length,opacity:wallMode==='overlay'?.10:1,trusses:parts.filter(p=>p.c.group==='trusses'&&p.o.visible).length,terrain:groundGroup.visible,roof:parts.filter(p=>p.c.group==='roof'&&p.o.visible).length,caps:caps.children.length,selected:selected?.c.id||null,objectRefs:selected?.c.object_refs||[],detail:detailLoader.state(),selectedInstanced:selected?.meshes.some(mesh=>instances.owns(mesh))||false,instances:instances.stats(),renderCalls:renderer.info.render.calls,geometryBuffers:renderer.info.memory.geometries,camera:camera.position.toArray(),target:controls.target.toArray(),zoom:camera.zoom,geometryUnchanged:parts.every((p,i)=>p.o.matrixWorld.toArray().every((x,j)=>Math.abs(x-baseTransforms[i][j])<1e-9))}),project:id=>{const p=parts.find(p=>p.c.id===id);if(!p)return null;const m=p.meshes[0],g=m.geometry,pos=g.attributes.position,ix=g.index;let best=-1,point=new T.Vector3();for(let i=0;i<(ix?ix.count:pos.count);i+=3){const a=[0,1,2].map(j=>new T.Vector3().fromBufferAttribute(pos,ix?ix.getX(i+j):i+j));const area=a[1].clone().sub(a[0]).cross(a[2].clone().sub(a[0])).lengthSq();if(area>best){best=area;point.copy(a[0]).add(a[1]).add(a[2]).multiplyScalar(1/3);}}const q=point.applyMatrix4(m.matrixWorld).project(camera),rect=canvas.getBoundingClientRect();return [rect.left+(q.x*.5+.5)*rect.width,rect.top+(.5-q.y*.5)*rect.height];}};
- const originalState=window.viewer.state;window.viewer.state=()=>({...originalState(),language:currentLanguage(),selectionPulse:{active:Boolean(selected&&!reducedMotion.matches&&selected.o.visible),reducedMotion:reducedMotion.matches,periodMs:2800,strength:pulseStrength}});
+ const originalState=window.viewer.state;window.viewer.state=()=>({...originalState(),terrainTranslucent,language:currentLanguage(),selectionPulse:{active:Boolean(selected&&!reducedMotion.matches&&selected.o.visible),reducedMotion:reducedMotion.matches,periodMs:2800,strength:pulseStrength}});
  document.querySelector('#loading').hidden=true;translateTree();window.ready=true;draw();
 }
