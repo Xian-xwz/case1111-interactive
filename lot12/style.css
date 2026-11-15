@@ -24,6 +24,7 @@
 
 /* 专业目录沿用现有侧栏；隐藏的目录不进入键盘顺序。 */
 .catalog nav[hidden]{display:none}
+.catalog-group button[hidden]{display:none}
 .catalog-switch{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
 .catalog-switch button,#catalog-all{background:#eaeadd6b;border:1px solid transparent;border-radius:5px;padding:8px;text-align:left;font-weight:550}
 .catalog-switch button[aria-pressed="true"],#catalog-all[aria-pressed="true"]{background:#315f56;color:#fff}

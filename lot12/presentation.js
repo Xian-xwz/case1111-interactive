@@ -39,6 +39,8 @@ function fields(parent,rows){
  parent.append(list);
 }
 export function componentTitle(component){
+ const title=component.parameters?.viewer?.design?.title;
+ if(title)return translated(title);
  const rows=component.parameters?.viewer?.design?.fields||[];
  const location=rows.find(row=>row.label==='所在位置')?.value||'';
  const lot=String(location).match(/Lot\s*\d+/)?.[0];
@@ -57,7 +59,7 @@ function renderSummary(component,refs){
   card.append(list);
   if(summary.pending?.length){card.append(node('h4',localCopy('pending')));const ul=node('ul');for(const item of summary.pending)ul.append(node('li',item));card.append(ul);}
   if(summary.boundary)card.append(node('p',summary.boundary,'summary-boundary'));
-  if(review.revision)card.append(node('p',review.revision+' · '+(review.geometry_revision||''),'summary-revision'));
+  if(review.revision)card.append(node('p',[review.revision,review.geometry_revision].filter(Boolean).join(' · '),'summary-revision'));
   return card;
  }
  if(!data?.design?.fields?.length)return null;
@@ -89,7 +91,7 @@ export function renderPresentation(component,refs,{selectRelated,openSource}){
  const summary=renderSummary(component,refs);if(summary)root.append(summary);
  const technical=node('details',undefined,'detail-technical');technical.append(node('summary',localCopy('source_details',translated('展开完整计算、连接与依据'))));if(!summary)technical.open=true;root.append(technical);
  technical.append(node('p',localText('Source text is retained in its supplied language.','来源原文保留原语。'),'field-source'));
- const section=(key,title)=>{const s=node('section');s.id='detail-'+key;s.append(node('h3',title));technical.append(s);return s;};
+ const section=(key,title,parent=technical)=>{const s=node('section');s.id='detail-'+key;s.append(node('h3',title));parent.append(s);return s;};
  if(data.fixture)root.append(node('p','FIXTURE · Test data / 测试资料，数值与确认均为演示','chip warning'));
  if(component.group==='walls'){
   const wall=section('wall','Wall attributes / 墙体属性');
@@ -109,7 +111,8 @@ export function renderPresentation(component,refs,{selectRelated,openSource}){
  const inputs=section('inputs','Calculation inputs / 计算输入');fields(inputs,data.inputs);
  const eng=data.engineering,state=engineeringState(eng,refs);
  const results=section('results','Engineering result / 工程结果');
- results.dataset.status=state.status;results.append(node('p',stateText[state.status],'chip warning'));
+ const calculation=data.calculation,resultStatus=calculation?.status||state.status;
+ results.dataset.status=resultStatus;results.append(node('p',stateText[resultStatus],'chip warning'));
  const resultPart=(key,label)=>{
   const result=eng?.[key],s=section(key,label);
   s.append(node('p',stateText[state.status==='stale'?'stale':result?.status]||stateText.not_calculated,'result-state'));
@@ -118,14 +121,22 @@ export function renderPresentation(component,refs,{selectRelated,openSource}){
   if(result?.missing?.length)s.append(node('p','Missing / 缺项：'+result.missing.join('；'),'missing-inputs'));
   if(result?.limitations)s.append(node('p',result.limitations));
  };
- resultPart('beam','Beam calculation / 梁验算');resultPart('fixing','Fixing selection / 固定连接选型');
- const sources=section('sources','Sources & calculation report / 原图与计算书');
- if(!data.sources?.length)sources.append(node('p','Not supplied / 尚未提供原图及计算书'));
- for(const source of data.sources||[]){
-  const b=node('button',source.title||'Open source / 查看依据','source-button');
-  b.onclick=()=>openSource(source,b);sources.append(b);
-  if(source.locator)sources.append(node('p',source.locator,'field-source'));
+ if(calculation){
+  fields(results,calculation.fields);
+  const fixing=section('fixing','Fixing basis / 连接依据');fields(fixing,data.connection_fields);
+ }else{
+  resultPart('beam','Beam calculation / 梁验算');resultPart('fixing','Fixing selection / 固定连接选型');
  }
+ if(!calculation||data.sources?.length){
+  const sources=section('sources','Sources & calculation report / 原图与计算书',calculation?root:technical);
+  if(!data.sources?.length)sources.append(node('p','Not supplied / 尚未提供原图及计算书'));
+  for(const source of data.sources||[]){
+   const b=node('button',source.title||'Open source / 查看依据','source-button');
+   b.onclick=()=>openSource(source,b);sources.append(b);
+   if(source.locator)sources.append(node('p',source.locator,'field-source'));
+  }
+ }
+ if(calculation)return root;
  const review=section('review','Review & CAD / 审阅与落图');
  review.append(node('p',state.status==='stale'?'Confirmation expired / 旧确认已过期':
   state.confirmed?'Confirmed record / 已有有效确认记录':'Awaiting coordinator confirmation / 待总控登记确认','confirmation-state'));

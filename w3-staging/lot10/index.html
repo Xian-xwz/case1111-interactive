@@ -41,12 +41,17 @@
   </div>
   <nav id="catalog-st" aria-label="ST systems">
    <details class="catalog-group"><summary>Foundations / 基础</summary>
-    <button type="button" disabled title="Data not supplied / 尚无对应数据">Piles / 桩 · Not supplied / 待提供</button>
+    <button type="button" data-catalog-placeholder disabled title="Data not supplied / 尚无对应数据">Piles / 桩 · Not supplied / 待提供</button>
+    <button type="button" data-catalog-filter="pile framing" data-catalog-role="post" data-catalog-when-present aria-pressed="false" hidden>Timber piles / 木桩</button>
+    <button type="button" data-catalog-filter="foundation" data-catalog-role="footing pile_footing" data-catalog-when-present aria-pressed="false" hidden>Concrete pile footings / 桩基混凝土</button>
     <button type="button" disabled title="Data not supplied / 尚无对应数据">Pad / Strip / Raft footings / 独立、条形与筏板基础 · Not supplied / 待提供</button>
    </details>
    <details class="catalog-group"><summary>Floors / 楼面</summary>
     <button type="button" data-catalog-filter="ground_slab upper_slab slabs" aria-pressed="false">Slabs / 楼板</button>
-    <button type="button" disabled title="Data not supplied / 尚无对应数据">Joists / Bearers / 楼面搁栅与主梁 · Not supplied / 待提供</button>
+    <button type="button" data-catalog-placeholder disabled title="Data not supplied / 尚无对应数据">Joists & bearers / 搁栅与托梁 · Not supplied / 待提供</button>
+    <button type="button" data-catalog-filter="bearer framing" data-catalog-role="bearer" data-catalog-when-present aria-pressed="false" hidden>Bearers / 托梁</button>
+    <button type="button" data-catalog-filter="floor_joist" data-catalog-when-present aria-pressed="false" hidden>Floor joists / 楼面搁栅</button>
+    <button type="button" data-catalog-filter="joist_blocking" data-catalog-when-present aria-pressed="false" hidden>Joist blocking / 搁栅挡块</button>
     <button type="button" disabled title="Data not supplied / 尚无对应数据">Floor openings / 楼面洞口 · Not supplied / 待提供</button>
    </details>
    <details class="catalog-group"><summary>Walls / 墙体</summary>

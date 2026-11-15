@@ -16,31 +16,51 @@ export function install(env){
  const ray=new T.Raycaster(),pointer=new T.Vector2();
  const views=new Map(cfg.views.map(v=>[v.id,v]));
  let view=cfg.default_view||cfg.views[0].id,roof=true,terrain=false,trusses=false,selected=null,dirty=true,down=null,initialized=false,surface=cfg.ground_default||'finished';
- let wallMode='solid';const layers=Object.fromEntries(cfg.floor_layers.map(l=>[l.id,true]));
+ let wallMode='solid',terrainTranslucent=false;const layers=Object.fromEntries(cfg.floor_layers.map(l=>[l.id,true]));
  const terrainByView={};
  let catalog=cfg.default_catalog||'arc',catalogFilter=null;
  const matchesCatalog=c=>!catalogFilter||(catalogFilter.groups.has(typeof c==='string'?c:c.group)&&(!catalogFilter.roles||catalogFilter.roles.has(c.role)));
  const partById=new Map(parts.map(p=>[p.c.id,p]));
  const isEnvelope=c=>cfg.framing_floors.includes(c.floor)&&['walls','opening_infill'].includes(c.group);
  const layerOf=c=>cfg.floor_layers.find(l=>(!l.groups||l.groups.includes(c.group))&&(!l.floors||l.floors.includes(c.floor)))?.id;
+ // 显示线保持原材质；地形透明度独立于图层显隐、现状/完成视图和墙体叠加。
+ const isTerrain=c=>['existing_ground','finished_ground'].includes(c.role);
+ const selectedTerrainRole=()=>surface+'_ground';
+ const terrainMeshes=part=>parts.filter(q=>q===part||(q.c.display_only&&q.c.id===part.c.id+'-shell'&&q.c.role===part.c.role)).flatMap(q=>q.meshes);
+ const hasTerrain=parts.some(p=>isTerrain(p.c)&&p.meshes.length>0);
+ const terrainOpacityControl=document.querySelector('#terrain-translucent');
+ document.querySelector('#terrain-opacity-control').hidden=!hasTerrain;
+ terrainOpacityControl.disabled=!hasTerrain;terrainOpacityControl.checked=false;
  let wallTheme='material';
  const candidateColors={fire:'#A33F4A',load_bearing:'#315C9D',bracing:'#70478B',non_bearing:'#286B63',unknown:'#626970',context:'#DAD5C9'};
  const themeColors={...candidateColors,...cfg.semantic_palette?.colors};
  const wallProperties=cfg.wall_properties?.metadata_sha256===env.meta.metadata_sha256?cfg.wall_properties.components||{}:{};
  const baseColors=new Map(parts.flatMap(p=>p.meshes.map(m=>[m,m.material.color.clone()])));
- const authorAlpha=new Map(parts.flatMap(p=>p.meshes.map(m=>[m,{transparent:m.material.transparent,opacity:m.material.opacity,depthWrite:m.material.depthWrite}])));
- const selectionColors=new Map();
+ const authorAlpha=new Map(parts.flatMap(p=>p.meshes.map(m=>[m,{transparent:m.material.transparent,opacity:m.material.opacity,depthWrite:m.material.depthWrite,castShadow:m.castShadow}])));
+ // 选中网格独立出实例批次，原始自发光用于暗相和恢复。
+ const selectionEmissives=new Map();
  const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
+ const blink=cfg.selection_blink;
+ const blinkEnabled=Number.isFinite(blink?.bright_ms)&&blink.bright_ms>0&&Number.isFinite(blink.dark_ms)&&blink.dark_ms>0;
+ const periodMs=blinkEnabled?blink.bright_ms+blink.dark_ms:2800;
  let pulseStarted=0,pulseStrength=.20;
- function highlight(mesh,strength=pulseStrength){mesh.material.emissive.copy(mesh.material.color).multiplyScalar(strength);}
- reducedMotion.addEventListener('change',()=>{pulseStrength=.20;if(selected)for(const mesh of selected.meshes)highlight(mesh);refreshLocalModel();dirty=true;});
+ function highlight(mesh){
+  const original=selectionEmissives.get(mesh),{color,emissive}=mesh.material;
+  emissive.setRGB(original.r+color.r*pulseStrength,original.g+color.g*pulseStrength,original.b+color.b*pulseStrength);
+ }
+ function applyHighlight(strength){
+  pulseStrength=strength;
+  if(selected)for(const mesh of selected.meshes)highlight(mesh);
+  refreshLocalModel();dirty=true;
+ }
+ reducedMotion.addEventListener('change',()=>{pulseStarted=performance.now();applyHighlight(.20);});
  function applyTheme(){
   const effective=catalog==='arc'?'material':wallTheme;
   for(const p of parts)if(p.c.group==='walls')for(const m of p.meshes){
    if(effective==='material')m.material.color.copy(baseColors.get(m));
    else{const value=wallValue(wallProperties[p.c.id],effective);m.material.color.set(value===null?themeColors.unknown:value?themeColors[effective]:themeColors.context);}
    m.material.emissive.setHex(0);
-   if(p===selected){selectionColors.set(m,m.material.color.clone());highlight(m);}
+   if(p===selected){selectionEmissives.get(m).copy(m.material.emissive);highlight(m);}
   }
   document.querySelector('#wall-theme').disabled=catalog==='arc';
   document.querySelector('#theme-status').textContent=effective==='material'?'Material / 材质色':
@@ -53,7 +73,7 @@ export function install(env){
  function fit(direction){
   controls.enableDamping=false;controls.update();controls.enableDamping=true;
   const current=views.get(view),plan=current.kind==='plan',box=new T.Box3();
-  for(const p of parts)if(plan?p.c.group!=='roof':p.o.visible)box.union(p.box);
+  for(const p of parts)if(plan&&!current.groups?p.c.group!=='roof':p.o.visible)box.union(p.box);
   if(groundGroup.visible)for(const b of groundBoxes)box.union(b);
   if(box.isEmpty()){for(const p of parts)box.union(p.box);}
   const center=box.getCenter(new T.Vector3());camera.up.set(0,1,0);if(plan)camera.up.set(0,0,-1);camera.zoom=1;controls.target.copy(center);camera.position.copy(center).add(new T.Vector3(...direction).normalize().multiplyScalar(90));camera.lookAt(center);camera.updateMatrixWorld();
@@ -64,27 +84,32 @@ export function install(env){
  function clearCaps(){while(caps.children.length){const c=caps.children[0];meshMap.delete(c);caps.remove(c);c.geometry.dispose();c.material.dispose();}}
  function applyView(reset=true){
   clearCaps();const current=views.get(view),plan=current.kind==='plan',cut=current.kind==='section',floor=current.floor;
-  groundGroup.visible=terrain&&!plan&&Boolean(cfg.ground)&&matchesCatalog('terrain');stage.visible=!groundGroup.visible&&!plan;sun.castShadow=!plan;
+  const terrainVisible=terrain&&!plan&&hasTerrain;
+  groundGroup.visible=!hasTerrain&&terrain&&!plan&&Boolean(cfg.ground)&&matchesCatalog('terrain');stage.visible=!terrainVisible&&!groundGroup.visible&&!plan;sun.castShadow=!plan;
   for(const p of parts){const c=p.c;let plane=null;
    p.o.visible=plan?(c.group!=='roof'&&(c.floor===floor||c.group==='stairs')):c.group==='roof'?roof&&!cut:c.group==='trusses'?trusses:true;
    if(current.groups&&!current.groups.includes(c.group)||current.block&&c.block!==current.block||current.floors&&!current.floors.includes(c.floor))p.o.visible=false;
    const layer=layerOf(c),envelope=isEnvelope(c),frame=c.group==='framing',overlay=envelope&&wallMode==='overlay';
    if(layer&&!layers[layer]||!matchesCatalog(c))p.o.visible=false;
    if(envelope&&wallMode==='frame'||frame&&wallMode==='solid')p.o.visible=false;
-   for(const m of p.meshes){const a=authorAlpha.get(m);m.material.transparent=overlay||a.transparent;m.material.opacity=overlay?.10:a.opacity;m.material.depthWrite=overlay?false:a.depthWrite;m.castShadow=!overlay&&!a.transparent;}
+   if(isTerrain(c))p.o.visible=terrainVisible&&c.role===selectedTerrainRole()&&(!layer||layers[layer])&&matchesCatalog(c);
+   const translucentGround=isTerrain(c)&&terrainTranslucent;
+   for(const m of p.meshes){const a=authorAlpha.get(m);m.material.transparent=translucentGround||overlay||a.transparent;m.material.opacity=translucentGround?.30:overlay?.10:a.opacity;m.material.depthWrite=translucentGround||overlay?false:a.depthWrite;m.castShadow=translucentGround||overlay?false:a.castShadow;}
    if(plan&&Number.isFinite(cfg.levels[c.block]?.[floor]))plane=new T.Plane(new T.Vector3(0,-1,0),cfg.levels[c.block][floor]+(current.cutAbove??1.2));
-   else if(cut){const s=current.sections[c.block];if(s)plane=new T.Plane(new T.Vector3(...s.normal),s.constant);}
+   else if(cut){const s=isTerrain(c)?Object.values(current.sections)[0]:current.sections[c.block];if(s)plane=new T.Plane(new T.Vector3(...s.normal),s.constant);}
    for(const m of p.meshes){m.material.clippingPlanes=plane?[plane]:[];m.material.clipShadows=true;m.material.needsUpdate=true;for(const e of m.children)if(e.isLineSegments){e.visible=(!plan||c.group==='stairs')&&!overlay;e.material.clippingPlanes=plane?[plane]:[];}}
-   if(p.o.visible&&plane&&!overlay){const first=caps.children.length;sectionCap(p.meshes,plane);for(const cap of caps.children.slice(first))meshMap.set(cap,p);}
+   if(p.o.visible&&plane&&!overlay&&!c.display_only){const first=caps.children.length;sectionCap(terrainMeshes(p),plane);for(const cap of caps.children.slice(first)){meshMap.set(cap,p);if(isTerrain(c)){const source=p.meshes[0].material;cap.material.transparent=source.transparent;cap.material.opacity=source.opacity;cap.material.depthWrite=source.depthWrite;cap.material.needsUpdate=true;}}}
   }
   document.querySelector('#view-title').textContent=current.label||current.title||current.id;document.querySelector('#view-zh').textContent=current.label_zh||'';
   for(const b of document.querySelectorAll('[data-view]')){b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-pressed',String(b.dataset.view===view));}
   for(const [id,on,disabled]of [['roof',roof,plan||cut],['trusses',trusses,plan],['terrain',terrain,plan]]){const e=document.getElementById(id);e.disabled=disabled||e.dataset.unavailable==='true';e.checked=on&&!e.disabled;}
-  document.querySelector('#surface').disabled=!groundGroup.visible;
+  document.querySelector('#surface').disabled=(!groundGroup.visible&&!terrainVisible)||(cfg.ground_states||[]).length<2;
+  terrainOpacityControl.checked=terrainTranslucent;
   for(const l of cfg.floor_layers)document.getElementById('layer-'+l.id).checked=layers[l.id];
   for(const b of document.querySelectorAll('[data-wall]')){const active=b.dataset.wall===wallMode;b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active));}
   document.querySelector('#layer-hint').textContent=plan?'Floor slice / 楼层切片':cut?'Roof hidden for the section / 剖切隐藏屋面':surface==='existing'&&groundGroup.visible?'Existing ground; proposed buildings for reference / 现状地形，拟建建筑用于定位':'Toggle layers to explore / 可切换图层';
-  updateSelectionVisibility();refreshLocalModel();instances.refresh(selected,localModel?selected:null);
+  if(blinkEnabled&&selected&&(!selected.o.visible||isSelectionClipped(selected)))clearSelection();
+  else{updateSelectionVisibility();refreshLocalModel();instances.refresh(selected,localModel?selected:null);}
   if(reset)fit(plan?[0,1,.0001]:(current.direction||[1,.72,1]));renderer.shadowMap.needsUpdate=true;dirty=true;translateTree();
  }
  const groupText={walls:'Wall / 墙体',opening_infill:'Opening / 洞口示意',ground_slab:'Ground floor slab / 一层地坪',upper_slab:'Upper floor slab / 二层楼板',stairs:'Stair / 楼梯',roof:'Roof / 屋面',trusses:'Roof truss / 屋架',framing:'Wall framing / 木墙构件'};
@@ -94,14 +119,18 @@ export function install(env){
   releaseLocalModel();
   closeSource();detailLoader.release();
   document.querySelector('#inspector').classList.remove('has-selection');
-  for(const [m,color] of selectionColors){m.material.color.copy(color);m.material.emissive.setHex(0);}selectionColors.clear();
+  for(const [m,emissive] of selectionEmissives)m.material.emissive.copy(emissive);
+  selectionEmissives.clear();
   selected=null;pulseStarted=0;pulseStrength=.20;instances.refresh(null);document.querySelector('#pin').hidden=true;document.querySelector('#clear').hidden=true;
   document.querySelector('#details').setAttribute('aria-busy','false');
   document.querySelector('#details').replaceChildren(el('p','Click a part of the model. 点击构件查看已有资料。','empty'));dirty=true;
  }
  // 同色提亮保留材质及专业主题的语义。
  function select(p){
-  clearSelection();if(!p)return;selected=p;pulseStarted=performance.now();for(const m of p.meshes){selectionColors.set(m,m.material.color.clone());highlight(m);}
+  clearSelection();if(!p||(blinkEnabled&&(!p.o.visible||isSelectionClipped(p))))return;
+  selected=p;pulseStarted=performance.now();
+  for(const m of p.meshes)selectionEmissives.set(m,m.material.emissive.clone());
+  applyHighlight(.20);
   instances.refresh(p);
   renderDetails(p,p.c,Boolean(p.c.detail));
   if(p.c.detail){
@@ -132,11 +161,15 @@ export function install(env){
    const source=selected.meshes[0].material;
    mesh.material.clippingPlanes=source.clippingPlanes;
    mesh.material.transparent=source.transparent;mesh.material.opacity=source.opacity;
-   mesh.material.depthWrite=source.depthWrite;mesh.material.color.copy(source.color);mesh.material.emissive.copy(source.emissive);mesh.material.needsUpdate=true;
+   mesh.material.depthWrite=source.depthWrite;mesh.castShadow=selected.meshes[0].castShadow;mesh.material.color.copy(source.color);mesh.material.emissive.copy(source.emissive);mesh.material.needsUpdate=true;
   });
  }
  async function showLocalModel(p,button){
-  if(localModel){releaseLocalModel();button.textContent='Load local model / 加载局部模型';return;}
+  if(localModel){
+   if(blinkEnabled)clearSelection();
+   else{releaseLocalModel();button.textContent='Load local model / 加载局部模型';}
+   return;
+  }
   button.disabled=true;button.textContent='Loading / 正在加载';
   try{
    const group=await detailLoader.loadModel(p.c);
@@ -169,7 +202,7 @@ export function install(env){
   document.querySelector('#clear').hidden=false;document.querySelector('#inspector').classList.add('has-selection');
   if(pending){if(!matchMedia('(max-width:580px)').matches)document.querySelector('#inspector').scrollIntoView({block:'start'});dirty=true;return;}
   const provenance=el('details','','detail-provenance');provenance.append(el('summary','构件编号、版本与模型参数'),el('p',c.id,'id'));
-  if(c.role)d.append(el('p',({stud:'Stud / 立柱',king_stud:'Full-height stud / 通高边柱',jack_stud:'Lintel support / 过梁支承柱',lintel:'Lintel / 过梁',head_trimmer:'Head trimmer / 非承重上横档',sill:'Window sill / 窗台板',bottom_plate:'Bottom plate / 底板',top_plate:'Top plate / 顶板',ribbon:'Capping plate / 天花边缘固定板',cripple:'Short stud / 短柱',nogging:'Nogging / 横撑',corner:'Corner / 转角构件'})[c.role]||c.role));
+  if(c.role&&!c.parameters?.viewer?.design?.title)d.append(el('p',({stud:'Stud / 立柱',king_stud:'Full-height stud / 通高边柱',jack_stud:'Lintel support / 过梁支承柱',lintel:'Lintel / 过梁',head_trimmer:'Head trimmer / 非承重上横档',sill:'Window sill / 窗台板',bottom_plate:'Bottom plate / 底板',top_plate:'Top plate / 顶板',ribbon:'Capping plate / 天花边缘固定板',cripple:'Short stud / 短柱',nogging:'Nogging / 横撑',corner:'Corner / 转角构件'})[c.role]||c.role));
   if(c.truss_id)d.append(el('p',`Lot ${c.lot} · ${c.truss_type} · ${c.profile_status==='measured'?'Supplied section / 已有截面详图':'Schematic section / 截面示意'}`));const params=Object.entries(c.parameters||{}).filter(([key])=>!['shared_object','viewer'].includes(key)),schematic=params.some(([,v])=>v?.status==='schematic');
   if(schematic)provenance.append(el('span','Contains schematic values / 含示意参数','chip warning'));
   for(const reference of p.c.object_refs||[]){
@@ -187,14 +220,14 @@ export function install(env){
  }
  const sourceDialog=document.querySelector('#source-dialog');
  function closeSource(){if(sourceDialog.open)sourceDialog.close();detailLoader.releaseSource();document.querySelector('#source-content').replaceChildren();}
- sourceDialog.addEventListener('close',()=>{detailLoader.releaseSource();document.querySelector('#source-content').replaceChildren();});
+ sourceDialog.addEventListener('close',()=>{if(!sourceDialog.open){detailLoader.releaseSource();document.querySelector('#source-content').replaceChildren();}});
  document.querySelector('#source-close').onclick=closeSource;
  async function openSource(source,button){
   closeSource();const owner=selected;button.disabled=true;
-  document.querySelector('#source-title').textContent=source.title||'Source / 依据';
+  document.querySelector('#source-title').textContent=translated(source.title||'Source / 依据');
   const content=document.querySelector('#source-content');content.append(el('p','Loading source / 正在读取依据'));sourceDialog.showModal();
   try{const url=await detailLoader.loadSource(source);if(selected!==owner)return;content.replaceChildren();
-   if(source.mime.startsWith('image/')){const img=document.createElement('img');img.src=url;img.alt=source.title||'Source page / 来源页';content.append(img);}
+   if(source.mime.startsWith('image/')){const img=document.createElement('img');img.src=url;img.alt=translated(source.title||'Source page / 来源页');content.append(img);}
    else{const link=el('a',source.mime==='text/html'?source.title:'Open report / 打开计算书');link.href=url;link.target='_blank';link.rel='noopener';content.append(link);}
    if(source.locator)content.append(el('p',source.locator));
   }catch(error){if(error.name!=='AbortError'&&selected===owner)content.replaceChildren(el('p','Source unavailable / 依据暂不可用：'+error.message));}
@@ -218,7 +251,10 @@ export function install(env){
   select(hit?(instances.partFor(hit)||meshMap.get(hit.object)):null);return selected?.c.id||null;
  }
  function preset(id){view=id;const current=views.get(id);for(const l of cfg.floor_layers)layers[l.id]=true;
-  roof=current.roof??current.kind!=='plan';trusses=current.trusses??!current.groups;terrain=terrainByView[id]??current.terrain??false;
+  roof=current.roof??current.kind!=='plan';trusses=current.trusses??!current.groups;terrain=terrainByView[id]??current.terrain??hasTerrain;
+  if((cfg.ground_states||[]).includes(current.ground_surface)){
+   surface=current.ground_surface;setGroundSurface(surface);document.querySelector('#surface').value=surface;
+  }
   wallMode=current.wall_mode||'solid';applyView();
  }
  // 切专业只切换目录。筛选是独立状态，与原楼层及剖切取交集。
@@ -243,6 +279,7 @@ export function install(env){
 
  document.querySelector('#trusses').onchange=e=>{trusses=e.target.checked;applyView(false);};document.querySelector('#roof').onchange=e=>{roof=e.target.checked;applyView(false);};document.querySelector('#terrain').onchange=e=>{terrain=e.target.checked;terrainByView[view]=terrain;applyView();};
  document.querySelector('#surface').onchange=e=>{surface=e.target.value;setGroundSurface(surface);applyView(false);};
+ terrainOpacityControl.onchange=e=>{if(!hasTerrain)return;terrainTranslucent=e.target.checked;applyView(false);};
  document.querySelector('#reset').onclick=()=>applyView();document.querySelector('#clear').onclick=clearSelection;
  const activePointers=new Set();
  canvas.addEventListener('pointerdown',e=>{activePointers.add(e.pointerId);down=activePointers.size===1&&e.button===0?{x:e.clientX,y:e.clientY,id:e.pointerId}:null;});
@@ -254,10 +291,15 @@ export function install(env){
  new ResizeObserver(resize).observe(viewport);resize();preset(view);initialized=true;
  document.addEventListener('model-language',()=>{if(selected)renderDetails(selected,selected.detailData||selected.c,Boolean(selected.c.detail&&!selected.detailData));updateCatalog();document.querySelector('#view-title').textContent=translated(views.get(view).label||views.get(view).title||view);document.querySelector('#model-note').textContent=localText(cfg.note,cfg.noteZh||cfg.note);translateTree();dirty=true;});
  function draw(now=performance.now()){requestAnimationFrame(draw);controls.update();
-  if(selected&&!reducedMotion.matches&&selected.o.visible&&!document.hidden){pulseStrength=.16+.10*(.5-.5*Math.cos((now-pulseStarted)*Math.PI*2/2800));for(const mesh of selected.meshes)highlight(mesh);refreshLocalModel();dirty=true;}
+  if(selected&&!reducedMotion.matches&&selected.o.visible&&!document.hidden){
+   const elapsed=Math.max(0,now-pulseStarted);
+   const strength=blinkEnabled?(elapsed%periodMs<blink.bright_ms ? .20 : 0):.16+.10*(.5-.5*Math.cos(elapsed*Math.PI*2/periodMs));
+   if(strength!==pulseStrength)applyHighlight(strength);
+  }
   if(!dirty)return;dirty=false;renderer.render(scene,camera);
   const pin=document.querySelector('#pin');if(selected){const center=selected.box.getCenter(new T.Vector3()),q=center.clone().project(camera),x=(q.x*.5+.5)*viewport.clientWidth,y=(.5-q.y*.5)*viewport.clientHeight;pin.textContent=selected.displayLabel||selected.c.id;pin.hidden=!selected.o.visible||(selected.meshes[0]?.material.clippingPlanes||[]).some(pl=>pl.distanceToPoint(center)<-1e-5)||q.z<-1||q.z>1||Math.abs(q.x)>1||Math.abs(q.y)>1;pin.style.left=Math.min(viewport.clientWidth-100,Math.max(8,x+12))+'px';pin.style.top=Math.max(8,y-24)+'px';}}
- window.viewer={state:()=>({view,surface,visibleIds:parts.filter(p=>p.o.visible).map(p=>p.c.id),catalog,wallTheme,effectiveTheme:catalog==='arc'?'material':wallTheme,wallColors:Object.fromEntries(parts.filter(p=>p.c.group==='walls').map(p=>[p.c.id,p.meshes[0].material.color.getHexString()])),visible:parts.filter(p=>p.o.visible).length,total:parts.length,wallMode,layers:{...layers},groups:Object.fromEntries([...new Set(parts.map(p=>p.c.group))].map(g=>[g,parts.filter(p=>p.c.group===g&&p.o.visible).length])),upperEnvelope:parts.filter(p=>isEnvelope(p.c)&&p.o.visible).length,framing:parts.filter(p=>p.c.group==='framing'&&p.o.visible).length,opacity:wallMode==='overlay'?.10:1,trusses:parts.filter(p=>p.c.group==='trusses'&&p.o.visible).length,terrain:groundGroup.visible,roof:parts.filter(p=>p.c.group==='roof'&&p.o.visible).length,caps:caps.children.length,selected:selected?.c.id||null,objectRefs:selected?.c.object_refs||[],detail:detailLoader.state(),selectedInstanced:selected?.meshes.some(mesh=>instances.owns(mesh))||false,instances:instances.stats(),renderCalls:renderer.info.render.calls,geometryBuffers:renderer.info.memory.geometries,camera:camera.position.toArray(),target:controls.target.toArray(),zoom:camera.zoom,geometryUnchanged:parts.every((p,i)=>p.o.matrixWorld.toArray().every((x,j)=>Math.abs(x-baseTransforms[i][j])<1e-9))}),project:id=>{const p=parts.find(p=>p.c.id===id);if(!p)return null;const m=p.meshes[0],g=m.geometry,pos=g.attributes.position,ix=g.index;let best=-1,point=new T.Vector3();for(let i=0;i<(ix?ix.count:pos.count);i+=3){const a=[0,1,2].map(j=>new T.Vector3().fromBufferAttribute(pos,ix?ix.getX(i+j):i+j));const area=a[1].clone().sub(a[0]).cross(a[2].clone().sub(a[0])).lengthSq();if(area>best){best=area;point.copy(a[0]).add(a[1]).add(a[2]).multiplyScalar(1/3);}}const q=point.applyMatrix4(m.matrixWorld).project(camera),rect=canvas.getBoundingClientRect();return [rect.left+(q.x*.5+.5)*rect.width,rect.top+(.5-q.y*.5)*rect.height];}};
- const originalState=window.viewer.state;window.viewer.state=()=>({...originalState(),language:currentLanguage(),selectionPulse:{active:Boolean(selected&&!reducedMotion.matches&&selected.o.visible),reducedMotion:reducedMotion.matches,periodMs:2800,strength:pulseStrength}});
+ window.viewer={state:()=>({view,surface,visibleIds:parts.filter(p=>p.o.visible).map(p=>p.c.id),catalog,wallTheme,effectiveTheme:catalog==='arc'?'material':wallTheme,wallColors:Object.fromEntries(parts.filter(p=>p.c.group==='walls').map(p=>[p.c.id,p.meshes[0].material.color.getHexString()])),visible:parts.filter(p=>p.o.visible).length,total:parts.length,wallMode,layers:{...layers},groups:Object.fromEntries([...new Set(parts.map(p=>p.c.group))].map(g=>[g,parts.filter(p=>p.c.group===g&&p.o.visible).length])),upperEnvelope:parts.filter(p=>isEnvelope(p.c)&&p.o.visible).length,framing:parts.filter(p=>p.c.group==='framing'&&p.o.visible).length,opacity:wallMode==='overlay'?.10:1,trusses:parts.filter(p=>p.c.group==='trusses'&&p.o.visible).length,terrain:groundGroup.visible||parts.some(p=>isTerrain(p.c)&&p.o.visible),terrainCaps:caps.children.filter(m=>isTerrain(meshMap.get(m)?.c||{})).map(m=>({opacity:m.material.opacity,depthWrite:m.material.depthWrite})),localTerrainMaterials:localModel&&selected&&isTerrain(selected.c)?materialStates(localModel):[],terrainMaterials:parts.filter(p=>isTerrain(p.c)).map(p=>({id:p.c.id,visible:p.o.visible,opacity:p.meshes[0].material.opacity,depthWrite:p.meshes[0].material.depthWrite,castShadow:p.meshes[0].castShadow})),roof:parts.filter(p=>p.c.group==='roof'&&p.o.visible).length,caps:caps.children.length,selected:selected?.c.id||null,objectRefs:selected?.c.object_refs||[],detail:detailLoader.state(),selectedInstanced:selected?.meshes.some(mesh=>instances.owns(mesh))||false,instances:instances.stats(),renderCalls:renderer.info.render.calls,geometryBuffers:renderer.info.memory.geometries,camera:camera.position.toArray(),target:controls.target.toArray(),zoom:camera.zoom,geometryUnchanged:parts.every((p,i)=>p.o.matrixWorld.toArray().every((x,j)=>Math.abs(x-baseTransforms[i][j])<1e-9))}),project:id=>{const p=parts.find(p=>p.c.id===id);if(!p)return null;const m=p.meshes[0],g=m.geometry,pos=g.attributes.position,ix=g.index;let best=-1,point=new T.Vector3();for(let i=0;i<(ix?ix.count:pos.count);i+=3){const a=[0,1,2].map(j=>new T.Vector3().fromBufferAttribute(pos,ix?ix.getX(i+j):i+j));const area=a[1].clone().sub(a[0]).cross(a[2].clone().sub(a[0])).lengthSq();if(area>best){best=area;point.copy(a[0]).add(a[1]).add(a[2]).multiplyScalar(1/3);}}const q=point.applyMatrix4(m.matrixWorld).project(camera),rect=canvas.getBoundingClientRect();return [rect.left+(q.x*.5+.5)*rect.width,rect.top+(.5-q.y*.5)*rect.height];}};
+ const materialStates=object=>{const states=[];object.traverse(m=>{if(m.isMesh)states.push({opacity:m.material.opacity,depthWrite:m.material.depthWrite,castShadow:m.castShadow});});return states;};
+ const originalState=window.viewer.state;window.viewer.state=()=>({...originalState(),terrainTranslucent,language:currentLanguage(),selectionPulse:{active:Boolean(selected&&!reducedMotion.matches&&selected.o.visible&&!document.hidden),reducedMotion:reducedMotion.matches,periodMs,strength:pulseStrength}});
  document.querySelector('#loading').hidden=true;translateTree();window.ready=true;draw();
 }

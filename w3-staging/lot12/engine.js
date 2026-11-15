@@ -12,7 +12,7 @@ const byName=new Map();model.traverse(o=>{if(o.name){if(byName.has(o.name))throw
 const parts=[],boxes=[],roofAngles=[],caps=new T.Group();scene.add(caps);const edges=[];
 for(const c of meta.components){const o=byName.get(c.id);if(!o)throw Error('缺失命名实体 '+c.id);const box=new T.Box3().setFromObject(o),actual={id:c.id,group:c.group,floor:c.floor,block:c.block,min:box.min.toArray(),max:box.max.toArray()};
  for(const k of ['min','max'])for(let i=0;i<3;i++)if(Math.abs(actual[k][i]-c.bbox[k][i])>.0001)throw Error('GLB与元数据不符 '+c.id);boxes.push(actual);
- const meshes=[];o.traverse(m=>{if(!m.isMesh)return;meshes.push(m);const src=m.material;m.castShadow=!src.transparent;m.receiveShadow=true;m.material=new T.MeshStandardMaterial({color:c.presentation?.color ? c.presentation.color : c.group==='framing'?(['lintel','sill','corner'].includes(c.role)?'#c18d45':'#cdb27a'):(palette[c.material]||palette.wall),metalness:0,roughness:.92,side:T.DoubleSide,transparent:src.transparent,opacity:src.opacity,depthWrite:src.depthWrite});
+ const meshes=[];o.traverse(m=>{if(!m.isMesh)return;meshes.push(m);const src=m.material;m.castShadow=!src.transparent;m.receiveShadow=true;m.material=new T.MeshStandardMaterial({color:['existing_ground','finished_ground','terrain_annotation'].includes(c.role) ? src.color : c.presentation?.color ? c.presentation.color : c.group==='framing'?(['lintel','sill','corner'].includes(c.role)?'#c18d45':'#cdb27a'):(palette[c.material]||palette.wall),metalness:0,roughness:.92,side:T.DoubleSide,transparent:src.transparent,opacity:src.opacity,depthWrite:src.depthWrite});
   // 木架以实体显示，不再先生成边线再丢弃；其余构件保留原有轮廓线。
   if(c.group!=='framing'){const edge=new T.LineSegments(new T.EdgesGeometry(m.geometry,28),new T.LineBasicMaterial({color:palette.cut,transparent:true,opacity:c.group==='roof'?.24:.12}));m.add(edge);edge.userData.group=c.group;edges.push(edge);}
   if(c.group==='roof'){const pos=m.geometry.attributes.position,idx=m.geometry.index,arr=idx?Array.from(idx.array):Array.from({length:pos.count},(_,i)=>i);for(let j=0;j<arr.length;j+=3){const p=arr.slice(j,j+3).map(i=>new T.Vector3().fromBufferAttribute(pos,i).applyMatrix4(m.matrixWorld));const n=p[1].clone().sub(p[0]).cross(p[2].clone().sub(p[0])),area=n.length()/2;n.normalize();if(Math.abs(n.y)>.1&&Math.abs(n.y)<.999)roofAngles.push({id:c.id,group:c.group,block:c.block,angle:T.MathUtils.radToDeg(Math.acos(Math.abs(n.y))),area});}}
@@ -23,7 +23,7 @@ sun.position.copy(center).add(new T.Vector3(-extent,extent*1.8,extent));sun.targ
 const stage=new T.Mesh(new T.PlaneGeometry(extent*4,extent*4),new T.ShadowMaterial({opacity:.12}));stage.rotation.x=-Math.PI/2;stage.position.set(center.x,bounds.min.y-.03,center.z);stage.receiveShadow=true;scene.add(stage);
 const groundGroup=new T.Group(),groundBoxes=[],groundReport={included:false};scene.add(groundGroup);
 let setGroundSurface=()=>{};
-if(cfg.ground){
+if(cfg.ground && cfg.terrain_contract!==1){
  const data=await fetch('./ground.json').then(r=>r.json());const existing=data.surfaces.find(s=>s.kind==='existing'),finished=data.surfaces.find(s=>s.kind==='finished');
  const geometry=s=>{const g=new T.BufferGeometry();g.setAttribute('position',new T.Float32BufferAttribute(s.vertices.flat(),3));g.setIndex(s.triangles.flat());g.computeVertexNormals();return g;};
  const terrain=new T.Mesh(geometry(finished),new T.MeshStandardMaterial({color:'#cbd0b9',roughness:1,side:T.DoubleSide}));terrain.name=finished.id;terrain.receiveShadow=true;groundGroup.add(terrain);groundBoxes.push(new T.Box3().setFromObject(terrain));

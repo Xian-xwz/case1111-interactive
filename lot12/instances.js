@@ -8,9 +8,10 @@ export function createInstances(scene, parts) {
   for (const part of parts) {
     for (const mesh of part.meshes) {
       const material = mesh.material;
-      const key = [mesh.geometry.uuid, part.c.floor, part.c.block,
+      const key = [mesh.geometry.uuid, part.c.floor, part.c.block, part.c.group,
+        Boolean(part.c.display_only || part.c.representation === 'display_line' || part.c.site_kind === 'display_line'),
         material.color.getHexString(), material.side, material.roughness,
-        material.transparent, material.opacity, material.depthWrite].join('|');
+        material.transparent, material.opacity, material.depthWrite, mesh.castShadow].join('|');
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push({part, mesh});
     }
@@ -20,7 +21,7 @@ export function createInstances(scene, parts) {
     const first = entries[0].mesh;
     const batch = new T.InstancedMesh(first.geometry, first.material.clone(), entries.length);
     batch.material.color.setHex(0xffffff);
-    batch.castShadow = !first.material.transparent;
+    batch.castShadow = first.castShadow;
     batch.receiveShadow = true;
     batch.instanceMatrix.setUsage(T.DynamicDrawUsage);
     // 可见实例集合会随筛选改变，禁用旧包围球的整批裁剪。
@@ -53,7 +54,7 @@ export function createInstances(scene, parts) {
       batch.material.transparent = material.transparent;
       batch.material.opacity = material.opacity;
       batch.material.depthWrite = material.depthWrite;
-      batch.castShadow = !material.transparent;
+      batch.castShadow = entries[0].mesh.castShadow;
       batch.material.needsUpdate = true;
       batch.instanceMatrix.needsUpdate = true;
       if (batch.instanceColor) batch.instanceColor.needsUpdate = true;
