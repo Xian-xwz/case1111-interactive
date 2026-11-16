@@ -75,4 +75,10 @@ function fit(view,w,h){camera.up.set(0,1,0);const target=center.clone();if(view.
 
 const {createInstances}=await import('./instances.js');
 const instances=createInstances(scene,parts);
-const {install}=await import('./viewer.js');install({T,cfg,meta,metadataURL,gltfLoader,instances,scene,renderer,camera,model,parts,groundGroup,groundBoxes,setGroundSurface,stage,sun,caps,sectionCap});
+function setShadows(enabled){
+ // 灯光和渲染器同步；重新开启时重建阴影图。
+ sun.castShadow=enabled;
+ renderer.shadowMap.enabled=enabled;
+ renderer.shadowMap.needsUpdate=enabled;
+}
+const {install}=await import('./viewer.js');install({T,cfg,meta,metadataURL,gltfLoader,instances,scene,renderer,camera,model,parts,groundGroup,groundBoxes,setGroundSurface,setShadows,stage,caps,sectionCap});

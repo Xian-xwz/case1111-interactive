@@ -52,13 +52,14 @@ export function createDimensions({T,scene,camera,viewport,parts=[],cfg={},getVie
   const mesh=new T.Mesh(geometry,[material,sideMaterial]);mesh.renderOrder=10000;
   mesh.userData={text:content,anchor:point.clone(),direction:direction.clone(),outward,height:b.max.y-b.min.y,width:b.max.x-b.min.x};labels.push(mesh);group.add(mesh);
  }
- function dimension(a,b,start,end,record){
+ function dimension(a,b,start,end,record,drawStart=true){
   const axis=record.axis,length=Math.abs(b[axis]-a[axis]);if(length<1e-6)return;
   const direction=end.clone().sub(start).normalize(),tick=axis==='y'?new T.Vector3(1,1,0):new T.Vector3(1,0,1);
   tick.normalize().multiplyScalar(.12);
   // 界线仅保留尺寸线附近的一小段，外侧略伸出；真实测量锚点仍保留在记录中。
   const extension=(source,end)=>{const toSource=source.clone().sub(end),length=toSource.length();toSource.normalize();line(end.clone().addScaledVector(toSource,Math.min(.36,length*.8)),end.clone().addScaledVector(toSource,-.10));};
-  extension(a,start);extension(b,end);line(start,end);line(start.clone().sub(tick),start.clone().add(tick));line(end.clone().sub(tick),end.clone().add(tick));
+  if(drawStart){extension(a,start);line(start.clone().sub(tick),start.clone().add(tick));}
+  extension(b,end);line(start,end);line(end.clone().sub(tick),end.clone().add(tick));
   const mm=Number((length*1000).toFixed(1)),outward=start.clone().add(end).sub(a).sub(b).normalize();
   text(String(mm),start.clone().add(end).multiplyScalar(.5),direction,outward);
   values.push({...record,mm,start:a.toArray(),end:b.toArray(),lineStart:start.toArray(),lineEnd:end.toArray()});
@@ -76,11 +77,24 @@ export function createDimensions({T,scene,camera,viewport,parts=[],cfg={},getVie
  function buildLayout(){
   for(const chain of cfg.dimension_chains||[]){
    if(!chain.view_ids.includes(getView()))continue;
-   const refs=chain.station_refs.map(id=>{const part=byId.get(id);if(!part)throw Error(`Missing dimension reference: ${id}`);return part.box.getCenter(new T.Vector3());});
-   for(let i=1;i<refs.length;i++){
-    const a=refs[i-1].clone(),b=refs[i].clone();a.y=b.y=chain.elevation;
+   const station=(ref,face,basis)=>{
+    const part=byId.get(ref);
+    if(!part)throw Error(`Missing dimension reference: ${ref}`);
+    const point=part.box.getCenter(new T.Vector3());
+    if(face)point[chain.axis]=part.box[face][chain.axis];
+    return {ref,point,basis};
+   };
+   const stations=chain.station_refs.map(ref=>station(ref));
+   const endStation=chain.end_station;
+   if(endStation?.view_ids.includes(getView())){
+    stations.push(station(endStation.ref,endStation.face,endStation.basis));
+   }
+   for(let i=1;i<stations.length;i++){
+    const previous=stations[i-1],current=stations[i];
+    const a=previous.point.clone(),b=current.point.clone();a.y=b.y=chain.elevation;
     const start=a.clone(),end=b.clone();start[chain.offset_axis]=end[chain.offset_axis]=chain.offset;
-    dimension(a,b,start,end,{axis:chain.axis,basis:chain.basis,chain:chain.id,refs:chain.station_refs.slice(i-1,i+1)});
+    // 相邻尺寸共用分界刻记与界线。
+    dimension(a,b,start,end,{axis:chain.axis,basis:current.basis||chain.basis,chain:chain.id,refs:[previous.ref,current.ref]},i===1);
    }
   }
  }

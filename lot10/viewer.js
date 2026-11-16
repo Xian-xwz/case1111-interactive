@@ -6,7 +6,7 @@ import {renderPresentation,wallValue,componentTitle} from './presentation.js';
 import {configureLanguage,translateTree,translated,currentLanguage,localText} from './language.js';
 
 export function install(env){
- const {T,scene,renderer,camera,parts,model,cfg,groundGroup,groundBoxes,setGroundSurface,stage,sun,caps,sectionCap,instances}=env;
+ const {T,scene,renderer,camera,parts,model,cfg,groundGroup,groundBoxes,setGroundSurface,setShadows,stage,caps,sectionCap,instances}=env;
  configureLanguage(cfg);configureControls(cfg,env.meta);translateTree();
  const detailLoader=createDetailLoader(env.metadataURL,env.gltfLoader);
  let localModel=null,originalLayers=[];
@@ -40,6 +40,31 @@ export function install(env){
  const views=new Map(cfg.views.map(v=>[v.id,v]));
  let view=cfg.default_view||cfg.views[0].id,roof=true,terrain=false,trusses=false,selected=null,dirty=true,down=null,initialized=false,surface=cfg.ground_default||'finished';
  const dimensions=createDimensions({T,scene,camera,viewport,parts,cfg,getView:()=>view,onChange:()=>dirty=true,onModeChange:target=>target?preset(target):applyView()});
+ const shadowControl=document.querySelector('#shadows');
+ let shadowPreference=null;
+ const joistPlan=views.get('joist-plan'),foundationPlan=views.get('foundation-plan');
+ const sameBlockPlans=joistPlan?.kind==='plan'&&foundationPlan?.kind==='plan'&&
+  joistPlan.block===foundationPlan.block&&foundationPlan.floor&&foundationPlan.floor!==joistPlan.floor;
+ const foundationGroups=new Set(['framing','foundation']);
+ const inViewScope=(c,v)=>(!v.groups||v.groups.includes(c.group))&&(!v.block||v.block===c.block)&&
+  (!v.floors||v.floors.includes(c.floor));
+ let foundationUnderlay=null,foundationUnderlayInput=null;
+ if(sameBlockPlans){
+  foundationUnderlay=document.createElement('div');
+  foundationUnderlay.hidden=true;
+  const label=document.createElement('label');
+  label.className='toggle';
+  const caption=document.createElement('span');
+  caption.textContent='Show foundation underneath / 叠加显示下方基础';
+  foundationUnderlayInput=document.createElement('input');
+  foundationUnderlayInput.type='checkbox';
+  foundationUnderlayInput.id='foundation-underlay';
+  foundationUnderlayInput.checked=true;
+  foundationUnderlayInput.addEventListener('change',()=>applyView(false));
+  label.append(caption,foundationUnderlayInput);
+  foundationUnderlay.append(label);
+  document.querySelector('#views').after(foundationUnderlay);
+ }
  let wallMode='solid',terrainTranslucent=false;const layers=Object.fromEntries(cfg.floor_layers.map(l=>[l.id,true]));
  const terrainByView={};
  let catalog=cfg.default_catalog||'arc',catalogFilter=null;
@@ -108,14 +133,23 @@ export function install(env){
  function clearCaps(){while(caps.children.length){const c=caps.children[0];meshMap.delete(c);caps.remove(c);c.geometry.dispose();c.material.dispose();}}
  function applyView(reset=true){
   clearCaps();const current=views.get(view),plan=current.kind==='plan',cut=current.kind==='section',floor=current.floor;
+  const showFoundation=view==='joist-plan'&&foundationUnderlayInput?.checked;
+  if(foundationUnderlay)foundationUnderlay.hidden=view!=='joist-plan';
   const terrainVisible=terrain&&!plan&&hasTerrain;
-  groundGroup.visible=!hasTerrain&&terrain&&!plan&&Boolean(cfg.ground)&&matchesCatalog('terrain');stage.visible=!terrainVisible&&!groundGroup.visible&&!plan;sun.castShadow=!plan;
+  groundGroup.visible=!hasTerrain&&terrain&&!plan&&Boolean(cfg.ground)&&matchesCatalog('terrain');
+  const shadows=shadowPreference??!plan;
+  stage.visible=!terrainVisible&&!groundGroup.visible&&(!plan||shadows);
+  if(shadowControl)shadowControl.checked=shadows;
+  setShadows(shadows);
   for(const p of parts){const c=p.c;let plane=null;
+   // 叠层采用基础平面的同楼栋构件，继续服从图层与专业筛选。
+   const inFoundationUnderlay=showFoundation&&c.floor===foundationPlan.floor&&
+    foundationGroups.has(c.group)&&inViewScope(c,foundationPlan);
    p.o.visible=plan?(c.group!=='roof'&&(c.floor===floor||c.group==='stairs')):c.group==='roof'?roof&&!cut:c.group==='trusses'?trusses:true;
-   if(current.groups&&!current.groups.includes(c.group)||current.block&&c.block!==current.block||current.floors&&!current.floors.includes(c.floor))p.o.visible=false;
+   p.o.visible=inFoundationUnderlay||(p.o.visible&&inViewScope(c,current));
    const layer=layerOf(c),envelope=isEnvelope(c),frame=c.group==='framing',overlay=envelope&&wallMode==='overlay';
    if(layer&&!layers[layer]||!matchesCatalog(c))p.o.visible=false;
-   if(envelope&&wallMode==='frame'||frame&&wallMode==='solid')p.o.visible=false;
+   if(envelope&&wallMode==='frame'||frame&&wallMode==='solid'&&!inFoundationUnderlay)p.o.visible=false;
    if(isTerrain(c))p.o.visible=terrainVisible&&c.role===selectedTerrainRole()&&(!layer||layers[layer])&&matchesCatalog(c);
    const translucentGround=isTerrain(c)&&terrainTranslucent;
    for(const m of p.meshes){const a=authorAlpha.get(m);m.material.transparent=translucentGround||overlay||a.transparent;m.material.opacity=translucentGround?.30:overlay?.10:a.opacity;m.material.depthWrite=translucentGround||overlay?false:a.depthWrite;m.castShadow=translucentGround||overlay?false:a.castShadow;}
@@ -302,6 +336,7 @@ export function install(env){
  document.querySelector('#wall-theme').onchange=e=>{wallTheme=e.target.value;applyTheme();};
  for(const b of document.querySelectorAll('[data-detail-focus]'))b.onclick=()=>{const section=document.getElementById('detail-'+b.dataset.detailFocus);if(section){let parent=section.parentElement;while(parent){if(parent.tagName==='DETAILS')parent.open=true;parent=parent.parentElement;}section.scrollIntoView({block:'nearest'});}else document.querySelector('#catalog-status').textContent='Select a component to view its supplied data / 先选择构件查看对应资料';};
  for(const b of document.querySelectorAll('[data-view]'))b.onclick=()=>preset(b.dataset.view);
+ shadowControl?.addEventListener('change',event=>{shadowPreference=event.currentTarget.checked;applyView(false);});
  for(const b of document.querySelectorAll('[data-wall]'))b.onclick=()=>{wallMode=b.dataset.wall;applyView(false);};
  for(const l of cfg.floor_layers)document.getElementById('layer-'+l.id).onchange=e=>{layers[l.id]=e.target.checked;applyView(false);};
 
@@ -328,6 +363,6 @@ export function install(env){
   const pin=document.querySelector('#pin');if(selected){const center=selected.box.getCenter(new T.Vector3()),q=center.clone().project(camera),x=(q.x*.5+.5)*viewport.clientWidth,y=(.5-q.y*.5)*viewport.clientHeight;pin.textContent=selected.displayLabel||selected.c.id;pin.hidden=!selected.o.visible||(selected.meshes[0]?.material.clippingPlanes||[]).some(pl=>pl.distanceToPoint(center)<-1e-5)||q.z<-1||q.z>1||Math.abs(q.x)>1||Math.abs(q.y)>1;pin.style.left=Math.min(viewport.clientWidth-100,Math.max(8,x+12))+'px';pin.style.top=Math.max(8,y-24)+'px';}}
  window.viewer={state:()=>({view,surface,visibleIds:parts.filter(p=>p.o.visible).map(p=>p.c.id),catalog,wallTheme,effectiveTheme:catalog==='arc'?'material':wallTheme,wallColors:Object.fromEntries(parts.filter(p=>p.c.group==='walls').map(p=>[p.c.id,p.meshes[0].material.color.getHexString()])),visible:parts.filter(p=>p.o.visible).length,total:parts.length,wallMode,layers:{...layers},groups:Object.fromEntries([...new Set(parts.map(p=>p.c.group))].map(g=>[g,parts.filter(p=>p.c.group===g&&p.o.visible).length])),upperEnvelope:parts.filter(p=>isEnvelope(p.c)&&p.o.visible).length,framing:parts.filter(p=>p.c.group==='framing'&&p.o.visible).length,opacity:wallMode==='overlay'?.10:1,trusses:parts.filter(p=>p.c.group==='trusses'&&p.o.visible).length,terrain:groundGroup.visible||parts.some(p=>isTerrain(p.c)&&p.o.visible),terrainCaps:caps.children.filter(m=>isTerrain(meshMap.get(m)?.c||{})).map(m=>({opacity:m.material.opacity,depthWrite:m.material.depthWrite})),localTerrainMaterials:localModel&&selected&&isTerrain(selected.c)?materialStates(localModel):[],terrainMaterials:parts.filter(p=>isTerrain(p.c)).map(p=>({id:p.c.id,visible:p.o.visible,opacity:p.meshes[0].material.opacity,depthWrite:p.meshes[0].material.depthWrite,castShadow:p.meshes[0].castShadow})),roof:parts.filter(p=>p.c.group==='roof'&&p.o.visible).length,caps:caps.children.length,selected:selected?.c.id||null,objectRefs:selected?.c.object_refs||[],detail:detailLoader.state(),selectedInstanced:selected?.meshes.some(mesh=>instances.owns(mesh))||false,instances:instances.stats(),renderCalls:renderer.info.render.calls,geometryBuffers:renderer.info.memory.geometries,camera:camera.position.toArray(),target:controls.target.toArray(),zoom:camera.zoom,geometryUnchanged:parts.every((p,i)=>p.o.matrixWorld.toArray().every((x,j)=>Math.abs(x-baseTransforms[i][j])<1e-9))}),project:id=>{const p=parts.find(p=>p.c.id===id);if(!p)return null;const m=p.meshes[0],g=m.geometry,pos=g.attributes.position,ix=g.index;let best=-1,point=new T.Vector3();for(let i=0;i<(ix?ix.count:pos.count);i+=3){const a=[0,1,2].map(j=>new T.Vector3().fromBufferAttribute(pos,ix?ix.getX(i+j):i+j));const area=a[1].clone().sub(a[0]).cross(a[2].clone().sub(a[0])).lengthSq();if(area>best){best=area;point.copy(a[0]).add(a[1]).add(a[2]).multiplyScalar(1/3);}}const q=point.applyMatrix4(m.matrixWorld).project(camera),rect=canvas.getBoundingClientRect();return [rect.left+(q.x*.5+.5)*rect.width,rect.top+(.5-q.y*.5)*rect.height];}};
  const materialStates=object=>{const states=[];object.traverse(m=>{if(m.isMesh)states.push({opacity:m.material.opacity,depthWrite:m.material.depthWrite,castShadow:m.castShadow});});return states;};
- const originalState=window.viewer.state;window.viewer.state=()=>({...originalState(),dimensions:dimensions.state(),terrainTranslucent,language:currentLanguage(),selectionPulse:{active:Boolean(selected&&!reducedMotion.matches&&selected.o.visible&&!document.hidden),reducedMotion:reducedMotion.matches,periodMs,strength:pulseStrength}});
+ const originalState=window.viewer.state;window.viewer.state=()=>({...originalState(),dimensions:dimensions.state(),terrainTranslucent,shadows:renderer.shadowMap.enabled,language:currentLanguage(),selectionPulse:{active:Boolean(selected&&!reducedMotion.matches&&selected.o.visible&&!document.hidden),reducedMotion:reducedMotion.matches,periodMs,strength:pulseStrength}});
  document.querySelector('#loading').hidden=true;translateTree();window.ready=true;draw();
 }
