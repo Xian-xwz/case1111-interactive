@@ -52,14 +52,18 @@ function renderSummary(component,refs){
  const review=data?.review_summary,summary=review?.[currentLanguage()]||review?.['detail_'+currentLanguage()];
  if(summary){
   const card=node('section',undefined,'component-summary');card.id='detail-summary';card.dataset.revision=review.revision||'';
-  card.append(node('h3',localCopy('card_title',translated('先看结论'))));
-  card.append(node('p',localCopy(summary.status_key,summary.status||''),'summary-status'));
+  card.append(node('h3',summary.title||localCopy('card_title',translated('先看结论'))));
+  const compact=review.layout==='three-row';
+  if(summary.purpose&&!compact)card.append(node('p',summary.purpose,'summary-purpose'));
+  if(!compact)card.append(node('p',localCopy(summary.status_key,summary.status||''),'summary-status'));
   const list=node('dl',undefined,'summary-grid');
-  for(const key of ['member','span','use','connection'])list.append(node('dt',localCopy(key,key)),node('dd',summary[key]??localCopy('not_available')));
+  if(summary.rows?.length){
+   for(const row of summary.rows){list.append(node('dt',row.label),node('dd',row.value));if(row.basis)list.append(node('dt',''),node('dd',row.basis,'field-source'));}
+  }else for(const key of ['member','span','use','connection'])list.append(node('dt',localCopy(key,key)),node('dd',summary[key]??localCopy('not_available')));
   card.append(list);
-  if(summary.pending?.length){card.append(node('h4',localCopy('pending')));const ul=node('ul');for(const item of summary.pending)ul.append(node('li',item));card.append(ul);}
-  if(summary.boundary)card.append(node('p',summary.boundary,'summary-boundary'));
-  if(review.revision)card.append(node('p',[review.revision,review.geometry_revision].filter(Boolean).join(' · '),'summary-revision'));
+  if(summary.pending?.length){const pending=node('details');pending.append(node('summary',localCopy('pending',translated('这处还要核实'))+' · '+summary.pending.length));const ul=node('ul');for(const item of summary.pending)ul.append(node('li',item));pending.append(ul);card.append(pending);}
+  if(summary.boundary&&!compact)card.append(node('p',summary.boundary,'summary-boundary'));
+  if(review.revision&&!compact)card.append(node('p',[review.revision,review.geometry_revision].filter(Boolean).join(' · '),'summary-revision'));
   return card;
  }
  if(!data?.design?.fields?.length)return null;
@@ -89,8 +93,12 @@ function renderSummary(component,refs){
 export function renderPresentation(component,refs,{selectRelated,openSource}){
  const data=component.parameters?.viewer||{},root=node('div',undefined,'presentation');
  const summary=renderSummary(component,refs);if(summary)root.append(summary);
+ const nodeSource=data.sources?.find(s=>s.presentation_role==='node_detail');
+ if(nodeSource){const button=node('button','View connection figure / 查看节点详图','source-button node-source-button');button.onclick=()=>openSource(nodeSource,button);root.append(button);}
  const technical=node('details',undefined,'detail-technical');technical.append(node('summary',localCopy('source_details',translated('展开完整计算、连接与依据'))));if(!summary)technical.open=true;root.append(technical);
  technical.append(node('p',localText('Source text is retained in its supplied language.','来源原文保留原语。'),'field-source'));
+ if(data.detail_notes){const notes=data.detail_notes[currentLanguage()];if(notes){const s=node('section');s.append(node('h3','Member notes / 构件说明'));if(notes.status)s.append(node('p',notes.status));if(notes.purpose)s.append(node('p',notes.purpose));fields(s,notes.rows);technical.append(s);}}
+ if(data.prior_review_summary){const original=data.prior_review_summary[currentLanguage()]||data.prior_review_summary.zh;if(original){const section=node('details');section.append(node('summary','Original calculation context / 原有计算与方案说明'));for(const key of ['status','use','connection','boundary'])if(original[key])section.append(node('p',original[key]));for(const item of original.pending||[])section.append(node('p',item));technical.append(section);}}
  const section=(key,title,parent=technical)=>{const s=node('section');s.id='detail-'+key;s.append(node('h3',title));parent.append(s);return s;};
  if(data.fixture)root.append(node('p','FIXTURE · Test data / 测试资料，数值与确认均为演示','chip warning'));
  if(component.group==='walls'){
@@ -128,7 +136,7 @@ export function renderPresentation(component,refs,{selectRelated,openSource}){
   resultPart('beam','Beam calculation / 梁验算');resultPart('fixing','Fixing selection / 固定连接选型');
  }
  if(!calculation||data.sources?.length){
-  const sources=section('sources','Sources & calculation report / 原图与计算书',calculation?root:technical);
+  const sources=section('sources','Sources & calculation report / 原图与计算书',technical);
   if(!data.sources?.length)sources.append(node('p','Not supplied / 尚未提供原图及计算书'));
   for(const source of data.sources||[]){
    const b=node('button',source.title||'Open source / 查看依据','source-button');

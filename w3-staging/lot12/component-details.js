@@ -6,6 +6,24 @@ export function createDetailLoader(baseURL, gltfLoader) {
   let localModel = null;
   let sourceController = null;
   let sourceURL = null;
+  let previewController = null;
+  let previewURL = null;
+
+  function releasePreviewSource() {
+    previewController?.abort();previewController=null;
+    if(previewURL)URL.revokeObjectURL(previewURL);
+    previewURL=null;
+  }
+  async function loadPreviewSource(source) {
+    releasePreviewSource();
+    if(!['image/png','image/jpeg','image/webp'].includes(source.mime))throw new Error('节点预览需图片来源');
+    const active=new AbortController();previewController=active;
+    try {
+      const buffer=await readFile(source.path,source.sha256,active);
+      previewURL=URL.createObjectURL(new Blob([buffer],{type:source.mime}));
+      return previewURL;
+    } finally {if(previewController===active)previewController=null;}
+  }
 
   function releaseSource() {
     sourceController?.abort();sourceController = null;
@@ -35,6 +53,7 @@ export function createDetailLoader(baseURL, gltfLoader) {
     current = null;
     releaseModel();
     releaseSource();
+    releasePreviewSource();
   }
   async function readFile(relativePath, expectedHash, active) {
     if (!/^[a-f0-9]{64}$/.test(expectedHash || "")) throw new Error("构件资源缺少修订摘要");
@@ -118,7 +137,7 @@ export function createDetailLoader(baseURL, gltfLoader) {
     } finally { if (sourceController === active) sourceController = null; }
   }
   return {
-    load, loadModel, loadSource, releaseSource, release, releaseModel,
+    load, loadModel, loadSource, releaseSource, release, releaseModel, loadPreviewSource, releasePreviewSource,
     state: () => ({loaded: current?.id || null, active: Boolean(controller),
       sourceLoaded: Boolean(sourceURL), sourcePending: Boolean(sourceController),
       modelLoaded: Boolean(localModel), modelPending: Boolean(modelController)})
